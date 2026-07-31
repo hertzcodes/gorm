@@ -632,6 +632,21 @@ func TestOr(t *testing.T) {
 		t.Fatalf("Build OR condition, but got %v", result.Statement.SQL.String())
 	}
 
+	sub := dryDB.Clauses(clause.Where{
+		Exprs: []clause.Expression{
+			clause.OrConditions{
+				Exprs: []clause.Expression{
+					clause.Expr{SQL: "role = ?", Vars: []interface{}{"super_admin"}},
+					clause.Expr{SQL: "role = ?", Vars: []interface{}{"admin"}},
+				},
+			},
+		},
+	})
+	result = dryDB.Where(sub).Find(&User{})
+	if !regexp.MustCompile("SELECT \\* FROM .*users.* WHERE .*role.* = .+ OR .*role.* = .+").MatchString(result.Statement.SQL.String()) {
+		t.Fatalf("Build OR condition, but got %v", result.Statement.SQL.String())
+	}
+
 	result = dryDB.Where("role = ?", "admin").Or("role = ?", "super_admin").Find(&User{})
 	if !regexp.MustCompile("SELECT \\* FROM .*users.* WHERE .*role.* = .+ OR .*role.* = .+").MatchString(result.Statement.SQL.String()) {
 		t.Fatalf("Build OR condition, but got %v", result.Statement.SQL.String())
@@ -905,6 +920,7 @@ func TestSelectWithVariables(t *testing.T) {
 	DB.Save(&User{Name: "select_with_variables"})
 
 	rows, _ := DB.Table("users").Where("name = ?", "select_with_variables").Select("? as fake", gorm.Expr("name")).Rows()
+	defer rows.Close()
 
 	if !rows.Next() {
 		t.Errorf("Should have returned at least one row")
@@ -912,8 +928,6 @@ func TestSelectWithVariables(t *testing.T) {
 		columns, _ := rows.Columns()
 		AssertEqual(t, columns, []string{"fake"})
 	}
-
-	rows.Close()
 }
 
 func TestSelectWithArrayInput(t *testing.T) {
@@ -1110,6 +1124,10 @@ func TestSearchWithMap(t *testing.T) {
 
 	var user User
 	DB.First(&user, map[string]interface{}{"name": users[0].Name})
+	CheckUser(t, user, users[0])
+
+	user = User{}
+	DB.First(&user, map[string]interface{}{"users.name": users[0].Name})
 	CheckUser(t, user, users[0])
 
 	user = User{}

@@ -14,31 +14,48 @@ import (
 )
 
 func TestCreate(t *testing.T) {
-	user := *GetUser("create", Config{})
+	u1 := *GetUser("create", Config{})
 
-	if results := DB.Create(&user); results.Error != nil {
+	if results := DB.Create(&u1); results.Error != nil {
 		t.Fatalf("errors happened when create: %v", results.Error)
 	} else if results.RowsAffected != 1 {
 		t.Fatalf("rows affected expects: %v, got %v", 1, results.RowsAffected)
 	}
 
-	if user.ID == 0 {
-		t.Errorf("user's primary key should has value after create, got : %v", user.ID)
+	if u1.ID == 0 {
+		t.Errorf("user's primary key should has value after create, got : %v", u1.ID)
 	}
 
-	if user.CreatedAt.IsZero() {
+	if u1.CreatedAt.IsZero() {
 		t.Errorf("user's created at should be not zero")
 	}
 
-	if user.UpdatedAt.IsZero() {
+	if u1.UpdatedAt.IsZero() {
 		t.Errorf("user's updated at should be not zero")
 	}
 
 	var newUser User
-	if err := DB.Where("id = ?", user.ID).First(&newUser).Error; err != nil {
+	if err := DB.Where("id = ?", u1.ID).First(&newUser).Error; err != nil {
 		t.Fatalf("errors happened when query: %v", err)
 	} else {
-		CheckUser(t, newUser, user)
+		CheckUser(t, newUser, u1)
+	}
+
+	type user struct {
+		ID   int `gorm:"primaryKey;->:false"`
+		Name string
+		Age  int
+	}
+
+	var u2 user
+	if results := DB.Create(&u2); results.Error != nil {
+		t.Fatalf("errors happened when create: %v", results.Error)
+	} else if results.RowsAffected != 1 {
+		t.Fatalf("rows affected expects: %v, got %v", 1, results.RowsAffected)
+	}
+
+	if u2.ID != 0 {
+		t.Errorf("don't have the permission to read primary key from db, but got %v", u2.ID)
 	}
 }
 
@@ -789,5 +806,47 @@ func TestCreateFromMapWithTable(t *testing.T) {
 
 	if _, ok := records[1]["id"]; ok && fmt.Sprint(res3["id"]) != fmt.Sprint(records[1]["@id"]) {
 		t.Errorf("failed to create data from map with table, @id != id")
+	}
+}
+
+func TestCreateInBatchesWithReturning(t *testing.T) {
+	if DB.Dialector.Name() != "sqlite" && DB.Dialector.Name() != "postgres" {
+		t.Skip("RETURNING is only supported on SQLite >= 3.35.0 and PostgreSQL")
+	}
+
+	// Use a session with CreateBatchSize > 0 to force CreateInBatches internally
+	batchDB := DB.Session(&gorm.Session{}).Set("gorm:create_batch_size", 2)
+	// Override CreateBatchSize directly to simulate gorm.Config{CreateBatchSize: 2}
+	batchDB.CreateBatchSize = 2
+
+	users := []User{
+		*GetUser("create_in_batches_returning_1", Config{}),
+		*GetUser("create_in_batches_returning_2", Config{}),
+		*GetUser("create_in_batches_returning_3", Config{}),
+	}
+
+	// Must NOT panic — this was the bug
+	result := batchDB.Clauses(clause.Returning{}).Create(&users)
+	if result.Error != nil {
+		t.Fatalf("expected no error, got: %v", result.Error)
+	}
+
+	// IDs must be populated by RETURNING
+	for i, u := range users {
+		if u.ID == 0 {
+			t.Errorf("users[%d].ID should be populated by RETURNING, got 0", i)
+		}
+	}
+
+	// RowsAffected must match number of created rows
+	if result.RowsAffected != int64(len(users)) {
+		t.Errorf("expected RowsAffected = %d, got %d", len(users), result.RowsAffected)
+	}
+
+	// Verify records actually exist in DB
+	var count int64
+	DB.Model(&User{}).Where("name LIKE ?", "create_in_batches_returning%").Count(&count)
+	if count != int64(len(users)) {
+		t.Errorf("expected %d records in DB, got %d", len(users), count)
 	}
 }
